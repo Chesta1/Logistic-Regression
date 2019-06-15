@@ -1,0 +1,236 @@
+---
+title: "Imputation using mice"
+output: html_document
+---
+# reading the data and structure of the data. counting the percentage of na values available in the data in each variable.
+```{r}
+#library(naniar)
+HRTrain_featureanalysis <- read.csv(file = "HRTrainData.csv", sep = ",", na.strings = "")
+str(HRTrain_featureanalysis)
+p <-function(x){sum(is.na(x))/length(x)}*100
+apply(HRTrain_featureanalysis,2,p)
+```
+
+
+# using mice library to deal with missing data
+
+```{r}
+library(mice)
+md.pattern(HRTrain_featureanalysis)
+```
+# so in the above we are getting 2409 na values or missing values in the education variable and 4124 na/missing values in the previous year rating
+# doing the variable pair wise analysis of the data.
+
+
+```{r}
+md.pairs(HRTrain_featureanalysis)
+```
+# doing the imputation of the missing data
+
+```{r}
+impute<- mice(HRTrain_featureanalysis[,2:14], m= 3, seed = 123)
+```
+```{r}
+print(impute)
+```
+
+
+### so imputation has replaced the na values in education using the polyreg which is Bayesian Polytomous Regression as the education has fator variables more than 2 and use Predictive Mean Matching(PMM) for previous year rating.
+
+
+### printing the imputed values for the previous year rating
+
+
+```{r}
+impute$imp$previous_year_rating
+```
+
+### Here we get the 3 imputations for both the variables. This is for the previous year rating and for education will be shown later.
+### In this 3 imputation for the previous year rating which one seems best fit will go for that imputation by doing some random analysis of the missing value variables.
+
+
+## Imputation for the education variable
+
+```{r}
+impute$imp$education
+```
+
+
+### Now to complete the data with the imputated values for which I have consisdered the 1st column of the imputation
+
+
+```{r}
+newdataHR<-complete(impute,1)
+head(newdataHR)
+```
+## doing the feature selection  firstly using boruta 
+
+```{r}
+library(Boruta)
+set.seed(123)
+HR_Data_feature = Boruta(newdataHR$is_promoted ~., data = newdataHR, doTrace= 2, maxRuns = 500)
+```
+```{r}
+print(HR_Data_feature)
+```
+```{r}
+plot(HR_Data_feature, las =2)
+```
+```{r}
+plotImpHistory(HR_Data_feature)
+```
+```{r}
+attStats(HR_Data_feature)
+```
+# using logistic regression to do feature selection using the p value.
+
+```{r}
+attach(newdataHR)
+fit_glm = glm(is_promoted ~ . ,data = newdataHR, family = binomial )
+```
+```{r}
+summary(fit_glm)
+```
+## Coeff of full logistic regression
+
+```{r}
+coef(fit_glm)
+```
+# stepwise variable selection
+
+```{r}
+nothing <- glm(is_promoted ~1, family = binomial)
+summary(nothing)
+```
+```{r}
+step(fit_glm)
+```
+```{r}
+step(fit_glm, direction = "backward", trace = FALSE)
+```
+```{r}
+formula(fit_glm)
+```
+## forward selection
+```{r}
+forwards = step(nothing, scope = list(lower = formula(nothing), upper = formula(fit_glm)), direction = "forward")
+```
+```{r}
+formula(forwards)
+```
+## both direction
+```{r}
+bothways = step(nothing, scope = list(lower = formula(nothing), upper = formula(fit_glm)), direction = "both", trace = 0)
+
+```
+```{r}
+formula(bothways)
+```
+```{r}
+View(newdataHR)
+```
+
+# Logistic regression for doing predictions using the features that has been selected by doing feature selection analysis using boruta and feature selection using forward, backward and both sides selection. In all these selection the variable which comes common as least important is "recruitment channel"and the second which has the least importance or is the least contributive as per the "bothways selection" is the gender. So while doing the predictions not considering these two variables.
+```{r}
+set.seed(123)
+ind <- sample(2,nrow(newdataHR), replace = TRUE, prob = c(0.8,0.2))
+train <-newdataHR[ind==1,]
+test<- newdataHR[ind==2,]
+```
+
+
+```{r}
+prediction_model = glm(is_promoted ~ KPIs_met..80.+avg_training_score+department+awards_won.+previous_year_rating+region+age+length_of_service+education+no_of_trainings, data = train[,-c(4,5)],family = 'binomial')
+```
+```{r}
+summary(prediction_model)
+```
+
+```{r}
+p1 <- predict(prediction_model,data = train[,-c(4,5)], type = 'response')
+head(p1)
+head(newdataHR[,-c(4,5)])
+```
+# Missclassification error  in the train data, confusion matrix
+```{r}
+pred1 <- ifelse(p1>0.5,1,0)
+tab1=table(Predicted = pred1,Actual=train$is_promoted)
+tab1
+```
+# creating the histogram of the prediction
+```{r}
+hist(p1)
+```
+
+
+
+#miss classification error perecntage on the training data
+```{r}
+1-sum(diag(tab1))/sum(tab1)
+```
+# getting the accuracy of the data
+```{r}
+sum(diag(tab1))/sum(tab1)
+```
+# doing the validation on 20% of the data
+```{r}
+ptest_train <- predict(prediction_model, newdata = test[,-c(4,5)], type = 'response')
+pred <- ifelse(ptest_train>0.5,1,0)
+tab2 = table(Predicted = pred, Actual = test$is_promoted)
+tab2
+```
+# misclassification error percentage on the test_train data(cross validation)
+```{r}
+1-sum(diag(tab2))/sum(tab2)
+```
+# gettung the accuracy of the validation sample
+```{r}
+sum(diag(tab2))/sum(tab2)
+```
+
+
+
+
+
+# getting the testing data
+```{r}
+Hrtest <- read.csv(file = "HRTestData.csv", sep = ",", na.strings = "")
+str(Hrtest)
+summary(Hrtest)
+```
+# doing the imputation of the testing data
+```{r}
+imputeTest <- mice(Hrtest[,2:13], m = 3, seed = 123)
+```
+```{r}
+print(imputeTest)
+```
+```{r}
+imputeTest$imp$previous_year_rating
+```
+```{r}
+Hrtest_impute <- complete(imputeTest, 1)
+head(Hrtest_impute)
+```
+
+# doing the prediction of the model using the test data
+```{r}
+colnames(Hrtest_impute)[which(names(Hrtest_impute)== "awards_won")] <- "awards_won."
+```
+
+```{r}
+Hrtest_impute$is_promoted <- predict(prediction_model, newdata = Hrtest_impute[,-13], type = 'response')
+length(Hrtest_impute$is_promoted)
+```
+```{r}
+Hrtest_impute$result <- ifelse(Hrtest_impute$is_promoted>0.5,1,0)
+
+```
+
+
+
+
+
+
+
+
